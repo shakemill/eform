@@ -26,6 +26,56 @@ import type { z } from "zod";
 
 type Piece = z.infer<typeof typePieceSchema>;
 
+type OcrMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+const OCR_ALLOWED_TYPES: readonly string[] = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
+
+/**
+ * Downscale + JPEG for OCR: mobile photos are often 10–40MB as base64 and hit
+ * serverless body limits; HEIC from iOS often fails Zod/Claude unless decoded first.
+ */
+async function prepareImageForOcr(file: File): Promise<{
+  imageBase64: string;
+  mediaType: OcrMediaType;
+}> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const maxEdge = 1920;
+      let { width, height } = bitmap;
+      const scale = Math.min(1, maxEdge / Math.max(width, height, 1));
+      const w = Math.max(1, Math.round(width * scale));
+      const h = Math.max(1, Math.round(height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas indisponible");
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+      const [, data] = dataUrl.split(",");
+      if (!data?.length) throw new Error("Encodage image échoué");
+      return { imageBase64: data, mediaType: "image/jpeg" };
+    } finally {
+      bitmap.close?.();
+    }
+  } catch {
+    const { base64, mediaType } = await fileToBase64(file);
+    if (!OCR_ALLOWED_TYPES.includes(mediaType)) {
+      throw new Error(
+        "Format d’image non pris en charge. Sur iPhone : Réglages → Caméra → Formats → « Le plus compatible », ou choisissez une photo JPEG depuis la galerie.",
+      );
+    }
+    if (!base64.length) throw new Error("Lecture du fichier impossible.");
+    return { imageBase64: base64, mediaType: mediaType as OcrMediaType };
+  }
+}
+
 function fileToBase64(file: File): Promise<{ base64: string; mediaType: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -33,11 +83,7 @@ function fileToBase64(file: File): Promise<{ base64: string; mediaType: string }
       const r = reader.result as string;
       const [header, data] = r.split(",");
       const m = header?.match(/data:([^;]+)/);
-      const mediaType = (m?.[1] ?? "image/jpeg") as
-        | "image/jpeg"
-        | "image/png"
-        | "image/gif"
-        | "image/webp";
+      const mediaType = (m?.[1] ?? file.type ?? "image/jpeg").toLowerCase();
       resolve({ base64: data ?? "", mediaType });
     };
     reader.onerror = reject;
@@ -128,17 +174,21 @@ export function IdentiteForm({
       const images = await Promise.all(
         [rectoFile, versoFile]
           .filter((f): f is File => Boolean(f))
-          .map(async (f) => {
-            const { base64, mediaType } = await fileToBase64(f);
-            return { imageBase64: base64, mediaType };
-          }),
+          .map((f) => prepareImageForOcr(f)),
       );
       const res = await fetch("/api/extract-id", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ images }),
       });
-      const json = await res.json();
+      let json: { error?: string; data?: Record<string, string | null | undefined> };
+      try {
+        json = (await res.json()) as typeof json;
+      } catch {
+        throw new Error(
+          "Réponse serveur invalide — souvent des photos trop lourdes. Réessayez avec moins de zoom ou une seule image.",
+        );
+      }
       if (!res.ok) {
         throw new Error(json.error ?? "OCR échoué");
       }
@@ -231,10 +281,7 @@ export function IdentiteForm({
           />
           <div className="w-full max-w-xl space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
-              <label
-                htmlFor="ocr-recto-file"
-                className="flex min-h-24 cursor-pointer items-center gap-3 rounded-xl border border-[#00577a]/25 bg-[#00577a]/5 p-3 transition hover:bg-[#00577a]/10 active:scale-[0.99]"
-              >
+              <label className="relative flex min-h-24 cursor-pointer items-center gap-3 rounded-xl border border-[#00577a]/25 bg-[#00577a]/5 p-3 transition hover:bg-[#00577a]/10 active:scale-[0.99]">
                 <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#00577a]/15">
                   <Camera className="h-5 w-5 text-[#00577a]" />
                 </span>
@@ -244,20 +291,16 @@ export function IdentiteForm({
                     {rectoFile?.name ?? "Touchez pour choisir une image"}
                   </span>
                 </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  aria-label="Recto pour analyse OCR"
+                  onChange={(e) => setRectoFile(e.target.files?.[0] ?? null)}
+                />
               </label>
-              <Input
-                id="ocr-recto-file"
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                aria-label="Recto pour analyse OCR"
-                onChange={(e) => setRectoFile(e.target.files?.[0] ?? null)}
-              />
 
-              <label
-                htmlFor="ocr-verso-file"
-                className="flex min-h-24 cursor-pointer items-center gap-3 rounded-xl border border-[#00577a]/25 bg-[#00577a]/5 p-3 transition hover:bg-[#00577a]/10 active:scale-[0.99]"
-              >
+              <label className="relative flex min-h-24 cursor-pointer items-center gap-3 rounded-xl border border-[#00577a]/25 bg-[#00577a]/5 p-3 transition hover:bg-[#00577a]/10 active:scale-[0.99]">
                 <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#00577a]/15">
                   <ImagePlus className="h-5 w-5 text-[#00577a]" />
                 </span>
@@ -267,15 +310,14 @@ export function IdentiteForm({
                     {versoFile?.name ?? "Touchez pour choisir une image"}
                   </span>
                 </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  aria-label="Verso pour analyse OCR"
+                  onChange={(e) => setVersoFile(e.target.files?.[0] ?? null)}
+                />
               </label>
-              <Input
-                id="ocr-verso-file"
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                aria-label="Verso pour analyse OCR"
-                onChange={(e) => setVersoFile(e.target.files?.[0] ?? null)}
-              />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="outline" onClick={runOcr} disabled={ocrLoading}>
