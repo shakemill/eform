@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  role          UserRole  @default(CLIENT)
+
+  accounts Account[]
+  sessions Session[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model DemandeCompte {
+  id            String  @id @default(cuid())
+  statut        Statut  @default(BROUILLON)
+  etapeCourante Int     @default(1)
+
+  nom              String?
+  prenom           String?
+  dateNaissance    DateTime?
+  lieuNaissance    String?
+  nationalite      String?
+  numeroPiece      String?
+  typePiece        TypePiece?
+  dateExpiration   DateTime?
+  sexe             String?
+  profession       String?
+  adresse          String?
+  email            String?
+  telephone        String?
+  pieceIdentiteUrl String?
+
+  typeCompte       TypeCompte?
+  devise           String?
+  montantInitial   Decimal? @db.Decimal(18, 2)
+  modeAlimentation String?
+  carteBancaire    Boolean?
+  typeCarte        String?
+  decouvert        Boolean?
+  servicesOptions  Json?
+  beneficiaire     Json?
+  kycPep           Boolean?
+  kycSourceFonds   String?
+  kycObjetCompte   String?
+
+  qrCodeToken  String? @unique
+  qrCodeUrl    String?
+  emailEnvoye  Boolean @default(false)
+  agenceId     String?
+  banquierId   String?
+  motifRejet   String?
+  notes        String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  soumisAt DateTime?
+  traiteAt DateTime?
+
+  @@index([statut])
+  @@index([email])
+}
+
+enum UserRole {
+  CLIENT
+  BANQUIER
+}
+
+enum Statut {
+  BROUILLON
+  EN_ATTENTE
+  EN_COURS_TRAITEMENT
+  COMPLEMENT_REQUIS
+  VALIDEE
+  REJETEE
+}
+
+enum TypePiece {
+  CNI
+  PASSPORT
+  SEJOUR
+  PERMIS
+}
+
+enum TypeCompte {
+  COURANT
+  EPARGNE
+  ETUDIANT
+  PROFESSIONNEL
+}
