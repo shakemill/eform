@@ -47,7 +47,7 @@ async function prepareImageForOcr(file: File): Promise<{
     const bitmap = await createImageBitmap(file);
     try {
       const maxEdge = 1920;
-      let { width, height } = bitmap;
+      const { width, height } = bitmap;
       const scale = Math.min(1, maxEdge / Math.max(width, height, 1));
       const w = Math.max(1, Math.round(width * scale));
       const h = Math.max(1, Math.round(height * scale));
